@@ -67,6 +67,12 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # 清理预装的巨型软件，释放磁盘空间
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+
+        # 使用 ImmortalWrt 官方脚本安装编译环境
         sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
         sudo -E apt -yqq install dos2unix libfuse-dev
         sudo -E apt -yqq autoremove --purge
