@@ -1,52 +1,36 @@
-name: XG-040G-MD Custom Build
+name: XG-040G-MD
 
 on:
   workflow_dispatch:
+    inputs:
+      repo_branch:
+        description: '选择编译分支'
+        required: true
+        default: 'master-XG-040G-MD'
+        type: choice
+        options:
+          - master-XG-040G-MD
+          - openwrt-25.12-XG-040G-MD
 
 env:
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: master
+  REPO_URL: https://github.com/immortalwrt/immortalwrt.git
   DEVICE_TARGET: airoha
   DEVICE_SUBTARGET: an7581
-  CONFIG_FILE: seed.config
   CACHE_TOOLCHAIN: true
-  UPLOAD_BIN_DIR: true
+  UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
   TZ: Asia/Shanghai
 
 jobs:
   Build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Check Server Performance
-      run: |
-        echo "警告⚠"
-        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
-        echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 \n"
-        echo "--------------------------CPU信息--------------------------"
-        echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
-        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
-        echo "--------------------------内存信息--------------------------"
-        echo "已安装内存详细信息："
-        echo -e "$(sudo lshw -short -C memory | grep GiB) \n"
-        echo "--------------------------硬盘信息--------------------------"
-        echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
-
     - name: Initialization Environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 先清理不必要的预装软件，腾出空间
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
         sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-        sudo apt-get update
-        sudo -E apt -yqq install dos2unix libfuse-dev || true
-        sudo -E apt -yqq autoremove --purge
-        sudo -E apt -yqq autoclean
-        sudo -E apt -yqq clean
-        sudo -E systemctl daemon-reload
+        sudo -E apt -yqq install dos2unix libfuse-dev
         sudo timedatectl set-timezone "$TZ"
 
     - name: Combine Disks
@@ -60,34 +44,23 @@ jobs:
       uses: actions/checkout@main
 
     - name: Clone Source Code
+      env:
+        REPO_BRANCH: ${{ github.event.inputs.repo_branch }}
       run: |
-        df -hT $GITHUB_WORKSPACE
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone "$REPO_URL" -b "$REPO_BRANCH" openwrt
         cd openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
-        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
         echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_ENV
 
-    - name: Apply Patches
-      working-directory: openwrt
+    - name: Apply Device Patches
       run: |
-        if [ -d "$GITHUB_WORKSPACE/patches" ]; then
-          echo "Applying patches..."
-          for patch in $GITHUB_WORKSPACE/patches/*.patch; do
-            echo "-> $patch"
-            git apply "$patch" || echo "Warning: Failed to apply $patch"
-          done
-        else
-          echo "No patches directory found, skipping."
-        fi
+        cd $OPENWRT_PATH
+        bash $GITHUB_WORKSPACE/diy-part1.sh
 
     - name: Generate Variables
       run: |
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+        SOURCE_REPO="immortalwrt"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "RELEASE_TAG=XG-040G-MD-$(date +"%Y%m%d")-${{ github.run_number }}" >> $GITHUB_ENV
 
     - name: Cache Toolchain
@@ -106,57 +79,30 @@ jobs:
 
     - name: Load Custom Configuration
       run: |
-        [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
+        cp $GITHUB_WORKSPACE/seed.config .config
         make defconfig
-        grep "CONFIG_PACKAGE_luci-app-airoha-npu" .config || echo "WARNING: option missing!"
 
     - name: Download DL Package
       run: |
         cd $OPENWRT_PATH
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        find dl -size -1024c -delete
 
     - name: Compile Firmware
       id: compile
       run: |
         cd $OPENWRT_PATH
-        echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-
-    - name: Check Space Usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload Bin Directory
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_PATH }}/bin
 
     - name: Organize Files
       if: steps.compile.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
-        cat sha256sums
         echo "VERSION_KERNEL=$(find -type f -name "*.manifest" -exec grep -oP '^kernel - \K.*?(?=~|-\d+-)' {} \;)" >> $GITHUB_ENV
         cp $OPENWRT_PATH/.config build.config
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages
-        tar -zcf Packages.tar.gz packages
-        rm -rf packages feeds.buildinfo version.buildinfo
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
-
-    - name: Upload Firmware To Artifact
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE_PATH }}
 
     - name: Upload Firmware To Release
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
@@ -167,13 +113,6 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **This is OpenWrt Firmware for XG-040G-MD**
-          ### 📒 固件信息
-          - 目标分支：${{ env.REPO_BRANCH }}
-          - 源码地址: ${{ env.REPO_URL }}
-          - 默认地址: 192.168.1.1
-          - 默认密码: 无
-          ### 🧊 固件版本
-          - 内核版本：${{ env.VERSION_KERNEL }}
-          - 主源码更新记录：
-          - ${{ env.VERSION_INFO }}
+          **XG-040G-MD Firmware**
+          分支: ${{ env.REPO_BRANCH }}
+          内核版本: ${{ env.VERSION_KERNEL }}
