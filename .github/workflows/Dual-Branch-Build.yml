@@ -28,6 +28,7 @@ on:
 env:
   DEVICE_NAME: XG-040G-MD
   SOURCE_REPO: https://github.com/wina8201/immortalwrt
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # 强制使用 Node.js 24
 
 jobs:
   matrix-generate:
@@ -35,6 +36,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
+      - uses: actions/checkout@v4          # 升级到 v4
       - id: set-matrix
         run: |
           SCOPE="${{ github.event.inputs.scope }}"
@@ -54,8 +56,22 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.matrix-generate.outputs.matrix) }}
     steps:
-      - name: Checkout Actions repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4          # 升级到 v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo docker image prune -af
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+          gettext git java-propose-classpath libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python3 python3-distutils python3-setuptools \
+          rsync subversion swig time u-boot-tools unzip wget xsltproc zlib1g-dev \
+          libfuse-dev
 
       - name: Set up variables
         id: vars
@@ -68,15 +84,6 @@ jobs:
           fi
           echo "CONFIGS=$CONFIGS" >> $GITHUB_ENV
           echo "BRANCH=${{ matrix.branch }}" >> $GITHUB_ENV
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
-          gettext git java-propose-classpath libelf-dev libncurses5-dev \
-          libncursesw5-dev libssl-dev python3 python3-distutils python3-setuptools \
-          rsync subversion swig time u-boot-tools unzip wget xsltproc zlib1g-dev \
-          libfuse-dev
 
       - name: Clone ImmortalWrt source
         run: |
@@ -101,8 +108,14 @@ jobs:
             cp $GITHUB_WORKSPACE/${cfg}.config .config
             make defconfig
 
-            make download -j$(nproc) V=s
-            make -j$(nproc) V=s || { echo "Build failed for ${{ env.BRANCH }}/$cfg"; exit 1; }
+            # 下载依赖（单线程，避免并发问题）
+            make download -j1 V=s
+            # 编译，若失败打印完整日志
+            make -j$(nproc) V=s 2>&1 | tee build.log || {
+              echo "❌ Build failed for ${{ env.BRANCH }}/$cfg"
+              tail -n 200 build.log
+              exit 1
+            }
 
             KERNEL_VER=$(make kernelversion)
             TARGET_BOARD=$(grep '^CONFIG_TARGET_BOARD=' .config | cut -d= -f2 | tr -d '"')
@@ -116,7 +129,6 @@ jobs:
               seed-05) FEATURE="OpenClash-KSMBD-CUPS";;
             esac
 
-            # Tag 加上分支名避免冲突
             TAG_NAME="${DEVICE_NAME}-${FEATURE}-${{ env.BRANCH }}-${DATE}"
             echo "Preparing release: $TAG_NAME"
 
