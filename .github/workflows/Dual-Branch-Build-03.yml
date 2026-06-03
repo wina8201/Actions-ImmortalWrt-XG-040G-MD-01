@@ -1,4 +1,4 @@
-name: Build ImmortalWrt for XG-040G-MD
+name: XG-040G-MD Dual-Branch-Build-03
 on:
   workflow_dispatch:
     inputs:
@@ -16,13 +16,14 @@ on:
           - all: 全部配置(双分支)
 env:
   REPO_URL: https://github.com/fzs209/immortalwrt.git
+
 jobs:
   pre:
     runs-on: ubuntu-latest
     outputs:
       cfg_list: ${{ env.cfg }}
     steps:
-      - name: Make Config Array
+      - name: Set config list
         run: |
           if [[ "${{ inputs.config_choice }}" == "all" ]];then
             echo "cfg=seed-01.config,seed-02.config,seed-03.config,seed-04.config,seed-05.config" >> $GITHUB_ENV
@@ -137,72 +138,51 @@ jobs:
           HAS_CUPS=false
           CONFIG_DESC=""
           case "${{ inputs.config_choice }}" in
-            seed-01:*)
-              CONFIG_DESC="基础路由器功能"
-              ;;
-            seed-02:*)
-              CONFIG_DESC="基础路由器功能 + OpenClash 代理"
-              HAS_CUPS=false
-              ;;
-            seed-03:*)
-              CONFIG_DESC="基础路由器功能 + OpenClash 代理 + KSMBD 文件共享"
-              HAS_CUPS=false
-              ;;
-            seed-04:*)
-              CONFIG_DESC="基础路由器功能 + OpenClash 代理 + CUPS 打印机共享"
-              HAS_CUPS=true
-              ;;
-            seed-05:*)
-              CONFIG_DESC="基础路由器功能 + OpenClash 代理 + KSMBD 文件共享 + CUPS 打印机共享"
-              HAS_CUPS=true
-              ;;
-            all)
-              CONFIG_DESC="全部功能: [基础功能] [OpenClash] [OpenClash+KSMBD] [OpenClash+CUPS] [全部功能]"
-              HAS_CUPS=true
-              ;;
-            *)
-              CONFIG_DESC="未知配置"
-              ;;
+            seed-01:*) CONFIG_DESC="基础路由器功能"; HAS_CUPS=false ;;
+            seed-02:*) CONFIG_DESC="基础路由器功能 + OpenClash 代理"; HAS_CUPS=false ;;
+            seed-03:*) CONFIG_DESC="基础路由器功能 + OpenClash 代理 + KSMBD 文件共享"; HAS_CUPS=false ;;
+            seed-04:*) CONFIG_DESC="基础路由器功能 + OpenClash 代理 + CUPS 打印机共享"; HAS_CUPS=true ;;
+            seed-05:*) CONFIG_DESC="基础路由器功能 + OpenClash 代理 + KSMBD 文件共享 + CUPS 打印机共享"; HAS_CUPS=true ;;
+            all) CONFIG_DESC="全部功能: [基础功能] [OpenClash] [OpenClash+KSMBD] [OpenClash+CUPS] [全部功能]"; HAS_CUPS=true ;;
+            *) CONFIG_DESC="未知配置" ;;
           esac
-cat > release_body.md <<'EOF'
-### 📦 构建信息
-| 项目 | 内容 |
-|------|------|
-| **设备型号** | Nokia Bell XG-040G-MD |
-| **目标平台** | MediaTek Filogic (mediatek/filogic) |
-| **源码分支** | master-XG-040G-MD、openwrt-25.12-XG-040G-MD |
-| **配置类型** | ${CONFIG_DESC} |
-| **源码来源** | https://github.com/fzs209/immortalwrt |
-| **编译时间** | ${DATE} |
-| **内核版本** | master分支: 6.12 | openwrt-25.12分支: 6.6 |
 
-### 🗂️ 文件说明
-- `*-squashfs-sysupgrade.bin` → 在已有 OpenWrt/ImmortalWrt 中升级使用
-- `*-squashfs-factory.bin` → 从uboot首次刷机使用
-- `*build.config` → 本次编译使用的完整配置文件
+          echo "### 📦 构建信息" > release_body.md
+          echo "| 项目 | 内容 |" >> release_body.md
+          echo "|------|------|" >> release_body.md
+          echo "| **设备型号** | Nokia Bell XG-040G-MD |" >> release_body.md
+          echo "| **目标平台** | MediaTek Filogic (mediatek/filogic) |" >> release_body.md
+          echo "| **源码分支** | master-XG-040G-MD、openwrt-25.12-XG-040G-MD |" >> release_body.md
+          echo "| **配置类型** | ${CONFIG_DESC} |" >> release_body.md
+          echo "| **源码来源** | https://github.com/fzs209/immortalwrt |" >> release_body.md
+          echo "| **编译时间** | ${DATE} |" >> release_body.md
+          echo "| **内核版本** | master分支: 6.12 | openwrt-25.12分支: 6.6 |" >> release_body.md
+          echo "" >> release_body.md
+          echo "### 🗂️ 文件说明" >> release_body.md
+          echo "- \`*-squashfs-sysupgrade.bin\` → 在已有 OpenWrt/ImmortalWrt 中升级使用" >> release_body.md
+          echo "- \`*-squashfs-factory.bin\` → 从uboot首次刷机使用" >> release_body.md
+          echo "- \`*build.config\` → 本次编译使用的完整配置文件" >> release_body.md
+          echo "" >> release_body.md
+          echo "### 🔐 默认信息" >> release_body.md
+          echo "| 项目 | 默认值 |" >> release_body.md
+          echo "|------|--------|" >> release_body.md
+          echo "| **管理地址** | 192.168.1.1 |" >> release_body.md
+          echo "| **用户名** | root |" >> release_body.md
+          echo "| **密码** | *无（首次登录后请务必设置）* |" >> release_body.md
+          echo "" >> release_body.md
+          echo "### ⚠️ 注意事项" >> release_body.md
+          echo "- 刷机前请务必核对设备型号，错误固件可能导致变砖。" >> release_body.md
+          echo "- 建议在刷机前备份原厂固件和重要数据。" >> release_body.md
+          echo "- 若固件内集成第三方插件，其安全性请自行评估。" >> release_body.md
+          echo "- 本固件为自动编译生成，请仔细核对文件完整性后再刷写。" >> release_body.md
 
-### 🔐 默认信息
-| 项目 | 默认值 |
-|------|--------|
-| **管理地址** | 192.168.1.1 |
-| **用户名** | root |
-| **密码** | *无（首次登录后请务必设置）* |
-
-### ⚠️ 注意事项
-- 刷机前请务必核对设备型号，错误固件可能导致变砖。
-- 建议在刷机前备份原厂固件和重要数据。
-- 若固件内集成第三方插件，其安全性请自行评估。
-- 本固件为自动编译生成，请仔细核对文件完整性后再刷写。
-EOF
-          if [ "${HAS_CUPS}" = true ]; then
-cat >> release_body.md <<'EOF'
-- 本固件集成的打印机驱动为Epson-inkjet-printer-escpr，仅支持对应型号的爱普生喷墨打印机。
-EOF
+          if [ "${HAS_CUPS}" = true ];then
+            echo "- 本固件集成的打印机驱动为Epson-inkjet-printer-escpr，仅支持对应型号的爱普生喷墨打印机。" >> release_body.md
           fi
-cat >> release_body.md <<'EOF'
----
-*由 GitHub Actions 自动构建 | Release XG-040G-MD-${DATE_TAG}*
-EOF
+
+          echo "" >> release_body.md
+          echo "---" >> release_body.md
+          echo "*由 GitHub Actions 自动构建 | Release XG-040G-MD-${DATE_TAG}*" >> release_body.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
