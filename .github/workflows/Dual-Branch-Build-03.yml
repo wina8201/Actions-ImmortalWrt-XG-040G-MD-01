@@ -1,0 +1,207 @@
+name: XG-040G-MD Dual-Branch-Build-03
+on:
+  workflow_dispatch:
+    inputs:
+      config_choice:
+        description: '选择要编译的配置类型'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - seed-01: 基础路由器功能
+          - seed-02: 基础+OpenClash
+          - seed-03: 基础+OpenClash+KSMBD
+          - seed-04: 基础+OpenClash+CUPS
+          - seed-05: 全部功能
+          - all: 全部配置(双分支)
+env:
+  REPO_URL: https://github.com/fzs209/immortalwrt.git
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        branch:
+          - master-XG-040G-MD
+          - openwrt-25.12-XG-040G-MD
+        config: ${{ fromJson(inputs.config_choice == 'all' ? '["seed-01.config","seed-02.config","seed-03.config","seed-04.config","seed-05.config"]' : format('["{0}.config"]', split(inputs.config_choice, ':')[0])) }}
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v4
+
+      - name: Initialize Build Environment
+        uses: P3TERX/OpenWrt-Build-Environment@main
+
+      - name: Clone Source Code
+        run: |
+          git clone -b $REPO_BRANCH $REPO_URL openwrt
+        env:
+          REPO_BRANCH: ${{ matrix.branch }}
+        working-directory: ${{ runner.workspace }}
+
+      - name: Customize Source (Add CUPS & Printing Packages)
+        run: |
+          cd openwrt
+          echo "src-git cups https://github.com/fengchen-github/openwrt-cups.git" >> feeds.conf.default
+          git clone --depth=1 https://github.com/master-0123/openwrt-printing-packages package/printing-packages
+
+      - name: Load Configuration File
+        run: |
+          cd openwrt
+          cp ${{ github.workspace }}/${{ matrix.config }} .config
+          make defconfig
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: openwrt/.ccache
+          key: ${{ runner.os }}-openwrt-${{ matrix.branch }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-${{ matrix.branch }}-
+
+      - name: Build Firmware
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make -j$(nproc) V=s
+
+      - name: Rename Firmware Files
+        run: |
+          cd openwrt
+          DATE=$(date +%Y%m%d)
+          case $CONFIG in
+            seed-01.config) FEATURE="Base" ;;
+            seed-02.config) FEATURE="OpenClash" ;;
+            seed-03.config) FEATURE="OpenClash-KSMBD" ;;
+            seed-04.config) FEATURE="OpenClash-CUPS" ;;
+            seed-05.config) FEATURE="OpenClash-KSMBD-CUPS" ;;
+            *) FEATURE="Unknown" ;;
+          esac
+          case $BRANCH in
+            master-XG-040G-MD) BRANCH_SHORT="master" ;;
+            openwrt-25.12-XG-040G-MD) BRANCH_SHORT="25.12" ;;
+            *) BRANCH_SHORT="unknown" ;;
+          esac
+          PREFIX="XG-040G-MD-${FEATURE}-${BRANCH_SHORT}-${DATE}"
+          find bin/targets/mediatek/filogic/ -name "*squashfs-sysupgrade.bin" -exec mv {} ../${PREFIX}-squashfs-sysupgrade.bin \;
+          find bin/targets/mediatek/filogic/ -name "*squashfs-factory.bin" -exec mv {} ../${PREFIX}-squashfs-factory.bin \;
+          cp .config ../${PREFIX}-build.config
+        env:
+          CONFIG: ${{ matrix.config }}
+          BRANCH: ${{ matrix.branch }}
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.branch }}-${{ matrix.config }}
+          path: |
+            ./*.bin
+            ./*.config
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./firmwares
+
+      - name: Organize Files
+        run: |
+          find ./firmwares -type f -exec mv {} . \;
+          rm -rf ./firmwares
+
+      - name: Generate Release Body
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          DATE_TAG=$(date +%Y%m%d)
+          HAS_CUPS=false
+          CONFIG_DESC=""
+          case "${{ inputs.config_choice }}" in
+            seed-01:*)
+              CONFIG_DESC="基础路由器功能"
+              ;;
+            seed-02:*)
+              CONFIG_DESC="基础路由器功能 + OpenClash 代理"
+              HAS_CUPS=false
+              ;;
+            seed-03:*)
+              CONFIG_DESC="基础路由器功能 + OpenClash 代理 + KSMBD 文件共享"
+              HAS_CUPS=false
+              ;;
+            seed-04:*)
+              CONFIG_DESC="基础路由器功能 + OpenClash 代理 + CUPS 打印机共享"
+              HAS_CUPS=true
+              ;;
+            seed-05:*)
+              CONFIG_DESC="基础路由器功能 + OpenClash 代理 + KSMBD 文件共享 + CUPS 打印机共享"
+              HAS_CUPS=true
+              ;;
+            all)
+              CONFIG_DESC="全部功能: [基础功能] [OpenClash] [OpenClash+KSMBD] [OpenClash+CUPS] [全部功能]"
+              HAS_CUPS=true
+              ;;
+            *)
+              CONFIG_DESC="未知配置"
+              ;;
+          esac
+
+cat > release_body.md << EOF
+### 📦 构建信息
+| 项目 | 内容 |
+|------|------|
+| **设备型号** | Nokia Bell XG-040G-MD |
+| **目标平台** | MediaTek Filogic (mediatek/filogic) |
+| **源码分支** | master-XG-040G-MD、openwrt-25.12-XG-040G-MD |
+| **配置类型** | ${CONFIG_DESC} |
+| **源码来源** | https://github.com/fzs209/immortalwrt |
+| **编译时间** | ${DATE} |
+| **内核版本** | master分支: 6.12 | openwrt-25.12分支: 6.6 |
+
+### 🗂️ 文件说明
+- \`*-squashfs-sysupgrade.bin\` → 在已有 OpenWrt/ImmortalWrt 中升级使用
+- \`*-squashfs-factory.bin\` → 从uboot首次刷机使用
+- \`*build.config\` → 本次编译使用的完整配置文件
+
+### 🔐 默认信息
+| 项目 | 默认值 |
+|------|--------|
+| **管理地址** | 192.168.1.1 |
+| **用户名** | root |
+| **密码** | *无（首次登录后请务必设置）* |
+
+### ⚠️ 注意事项
+- 刷机前请务必核对设备型号，错误固件可能导致变砖。
+- 建议在刷机前备份原厂固件和重要数据。
+- 若固件内集成第三方插件，其安全性请自行评估。
+- 本固件为自动编译生成，请仔细核对文件完整性后再刷写。
+EOF
+
+          if [ "${HAS_CUPS}" = true ]; then
+cat >> release_body.md << EOF
+- 本固件集成的打印机驱动为Epson-inkjet-printer-escpr，仅支持对应型号的爱普生喷墨打印机。
+EOF
+          fi
+
+cat >> release_body.md << EOF
+---
+*由 GitHub Actions 自动构建 | Release XG-040G-MD-${DATE_TAG}*
+EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: XG-040G-MD ImmortalWrt 固件 $(date +%Y%m%d)
+          tag_name: XG-040G-MD-$(date +%Y%m%d)
+          body_path: release_body.md
+          files: |
+            ./*.bin
+            ./*.config
+          draft: false
+          prerelease: false
