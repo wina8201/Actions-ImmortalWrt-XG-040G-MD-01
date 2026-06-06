@@ -242,11 +242,11 @@ jobs:
       run: |
         cd $OPENWRT_PATH
         echo -e "$(nproc) thread compile"
-        # 若启用打印机，先预编译 cups 以确保 libcupsimage 就绪
+        # 若启用打印机，先预编译 cups (host + target) 以确保 libcupsimage 就绪
         if grep -q "CONFIG_PACKAGE_cups=y" .config; then
-          echo "🖨️ 预编译 CUPS 及过滤器..."
+          echo "🖨️ 预编译 CUPS (host 及目标版本)..."
+          make package/cups/host/compile -j1 V=s
           make package/cups/compile -j1 V=s
-          # make package/cups-filters/compile -j1 V=s
         fi
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
